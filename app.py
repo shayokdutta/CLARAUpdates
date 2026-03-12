@@ -5,7 +5,7 @@ import os
 import time
 
 # 1. Page Configuration
-st.set_page_config(page_title="Behavioral Analyzer", layout="wide")
+st.set_page_config(page_title="Reach Behavioral Analyzer", layout="wide")
 
 st.markdown("""
     <style>
@@ -27,6 +27,15 @@ st.markdown("""
             color: white !important;
             border-color: #d32f2f !important;
         }
+        
+        /* Style for the active video in the playlist */
+        .active-vid {
+            background-color: rgba(46, 125, 50, 0.2);
+            padding: 8px;
+            border-radius: 5px;
+            border-left: 4px solid #2e7d32;
+            margin-bottom: 5px;
+        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -45,30 +54,35 @@ if 'last_vid_date' not in st.session_state: st.session_state.last_vid_date = Non
 if 'video_outcomes' not in st.session_state: st.session_state.video_outcomes = {} 
 if 'animal_id' not in st.session_state: st.session_state.animal_id = ""
 if 'current_folder' not in st.session_state: st.session_state.current_folder = "."
-
-# --- NEW: Flag to track if the current dataframe has unsaved modifications ---
 if 'data_is_saved' not in st.session_state: st.session_state.data_is_saved = True
+
+# Tracks if the folder was just loaded so we don't auto-force a video to open after closing
+if 'video_paths_map' not in st.session_state: st.session_state.video_paths_map = {}
+if 'folder_loaded' not in st.session_state: st.session_state.folder_loaded = ""
 
 # ==========================================
 # 3. Core Functions & Callbacks
 # ==========================================
 
 def get_conflict_status(video_name, manual_outcome):
-    """
-    Compares manual outcome to the automated label in the filename.
-    Returns 1 for conflict/mismatch, 0 for match.
-    """
     if manual_outcome == "Ignore":
         return 1
-    
-    # Extract automated label from filename (e.g., 'fail' from '...reach_fail.mp4')
     base_name = os.path.splitext(video_name)[0]
     auto_label = base_name.split('_')[-1].lower()
     manual_label = manual_outcome.lower()
-    
     if manual_label in auto_label:
         return 0
     return 1
+
+def close_session():
+    st.session_state.video_outcomes = {}
+    st.session_state.animal_id = ""
+    st.session_state.data_is_saved = True 
+    st.session_state.current_video = None
+    st.session_state.current_session = None
+    st.session_state.last_vid_date = None
+    st.session_state.frame_number = 0
+    st.session_state.is_playing = False
 
 def switch_to_video(new_vid):
     parts = new_vid.split('_')
@@ -78,27 +92,25 @@ def switch_to_video(new_vid):
     if st.session_state.current_session and new_session != st.session_state.current_session:
         st.session_state.video_outcomes = {}
         st.session_state.animal_id = ""
-        st.session_state.data_is_saved = True # --- UPDATED: Reset flag for the new session ---
+        st.session_state.data_is_saved = True 
         
     st.session_state.current_video = new_vid
     st.session_state.current_session = new_session
     st.session_state.last_vid_date = vid_date
     st.session_state.frame_number = 0
     st.session_state.is_playing = False
-    st.session_state.video_selector = new_vid
 
 def process_uploaded_file(uploaded_file, vid_files):
     try:
         df_loaded = pd.read_csv(uploaded_file)
         if "Video" in df_loaded.columns and "Outcome" in df_loaded.columns:
             st.session_state.video_outcomes = dict(zip(df_loaded["Video"], df_loaded["Outcome"]))
-            st.session_state.data_is_saved = True # --- UPDATED: Loaded data is technically already saved ---
+            st.session_state.data_is_saved = True 
             
-            # Extract Animal ID from the filename (e.g., 251125_Mouse12_behaviorCounts.csv -> Mouse12)
             file_name = uploaded_file.name
             if "_behaviorCounts.csv" in file_name:
                 prefix = file_name.replace("_behaviorCounts.csv", "")
-                parts = prefix.split("_", 1) # Splits only on the very first underscore
+                parts = prefix.split("_", 1) 
                 if len(parts) > 1:
                     st.session_state.animal_id = parts[1]
             
@@ -106,22 +118,27 @@ def process_uploaded_file(uploaded_file, vid_files):
             if first_video_in_session in vid_files:
                 switch_to_video(first_video_in_session)
     except Exception as e:
-        print(f"Error loading file: {e}")
+        st.error(f"Error loading file: {e}")
 
-# --- NEW: Callback to mark data as saved when manual download is clicked ---
 def mark_as_saved():
     st.session_state.data_is_saved = True
 
 @st.dialog("💾 Session Complete: Save Data")
-def save_session_dialog(intended_vid):
-    st.warning(f"You are attempting to switch to a new session. Please save the data for **{st.session_state.current_session}** first.")
-    
+def save_session_dialog(intended_vid=None, action="switch"):
+    if action == "close":
+        st.warning(f"You have unsaved changes. Please save the data for **{st.session_state.current_session}** before closing.")
+    else:
+        st.warning(f"You are attempting to switch sessions. Please save the data for **{st.session_state.current_session}** first.")
+        
     date_str = st.session_state.last_vid_date
     yymmdd = date_str[2:] if len(date_str) == 8 else date_str 
     anim_id = st.session_state.animal_id.strip() if st.session_state.animal_id.strip() else "UnknownID"
     
     filename = f"{yymmdd}_{anim_id}_behaviorCounts.csv"
-    save_path = os.path.join(st.session_state.current_folder, filename)
+    
+    current_vid_abs_path = st.session_state.video_paths_map.get(st.session_state.current_video, st.session_state.current_folder)
+    save_dir = os.path.dirname(current_vid_abs_path)
+    save_path = os.path.join(save_dir, filename)
     
     succ = sum(1 for v in st.session_state.video_outcomes.values() if v == 'Success')
     fail = sum(1 for v in st.session_state.video_outcomes.values() if v == 'Fail')
@@ -139,39 +156,43 @@ def save_session_dialog(intended_vid):
     file_exists = os.path.exists(save_path)
     
     if file_exists:
-        st.error(f"⚠️ **Warning:** The file `{filename}` already exists in this folder.")
+        st.error(f"⚠️ **Warning:** `{filename}` already exists in the `{os.path.basename(save_dir)}` folder.")
         confirm_overwrite = st.checkbox("I confirm I want to overwrite the existing file.")
         disable_save = not confirm_overwrite
-        btn_label = f"⚠️ Overwrite '{filename}' & Switch"
+        btn_label = f"⚠️ Overwrite '{filename}' & " + ("Close" if action == "close" else "Switch")
     else:
         disable_save = False
-        btn_label = f"💾 Save '{filename}' to Video Folder & Switch"
+        btn_label = f"💾 Save '{filename}' to Folder & " + ("Close" if action == "close" else "Switch")
 
     if st.button(btn_label, use_container_width=True, disabled=disable_save):
         try:
             with open(save_path, "w") as f:
                 f.write(csv_data)
-            switch_to_video(intended_vid)
+                
+            if action == "close":
+                close_session()
+            else:
+                switch_to_video(intended_vid)
             st.rerun()
         except Exception as e:
             st.error(f"Failed to save file. Error: {e}")
     
     st.markdown("---")
-    if st.button("🗑️ Discard Data & Switch Anyway", type="primary", use_container_width=True, on_click=switch_to_video, args=(intended_vid,)):
+    discard_label = "🗑️ Discard Data & Close" if action == "close" else "🗑️ Discard Data & Switch Anyway"
+    if st.button(discard_label, type="primary", use_container_width=True):
+        if action == "close":
+            close_session()
+        else:
+            switch_to_video(intended_vid)
         st.rerun()
 
-def handle_radio_change():
-    new_vid = st.session_state.video_selector
-    if not new_vid or new_vid == st.session_state.current_video: return
-    
+def handle_video_click(new_vid):
     parts = new_vid.split('_')
     new_session = parts[2] if len(parts) >= 3 else "unknown"
     
     if st.session_state.current_session and new_session != st.session_state.current_session:
-        # --- UPDATED: Skip the save dialog if data is already saved or if no data was logged ---
         if not st.session_state.data_is_saved and len(st.session_state.video_outcomes) > 0:
-            st.session_state.video_selector = st.session_state.current_video
-            save_session_dialog(new_vid)
+            save_session_dialog(intended_vid=new_vid, action="switch")
         else:
             switch_to_video(new_vid)
     else:
@@ -180,7 +201,7 @@ def handle_radio_change():
 def classify_and_advance(outcome, video_files):
     current_vid = st.session_state.current_video
     st.session_state.video_outcomes[current_vid] = outcome
-    st.session_state.data_is_saved = False # --- UPDATED: Flag data as modified ---
+    st.session_state.data_is_saved = False 
     
     try:
         curr_idx = video_files.index(current_vid)
@@ -194,7 +215,6 @@ def classify_and_advance(outcome, video_files):
     except ValueError:
         pass 
 
-# Playback Callbacks
 def next_frame(total_frames):
     if st.session_state.frame_number < total_frames - 1: st.session_state.frame_number += 1
 def prev_frame():
@@ -206,22 +226,64 @@ def toggle_play(): st.session_state.is_playing = not st.session_state.is_playing
 # ==========================================
 # 4. Main App Layout
 # ==========================================
-folder_path = st.text_input("📁 Enter the absolute path to your video folder:", value=".")
+folder_path = st.text_input("📁 Enter the root directory path (e.g., .../learning/):", value=".")
 st.session_state.current_folder = folder_path 
 
 if os.path.exists(folder_path) and os.path.isdir(folder_path):
     supported_exts = ('.mp4', '.mkv', '.mov', '.avi')
-    video_files = sorted([f for f in os.listdir(folder_path) if f.lower().endswith(supported_exts)])
+    video_files = []
+    
+    st.session_state.video_paths_map.clear()
+    
+    for root, dirs, files in os.walk(folder_path):
+        for f in files:
+            if f.lower().endswith(supported_exts):
+                video_files.append(f)
+                st.session_state.video_paths_map[f] = os.path.join(root, f)
+
+    video_files = sorted(video_files)
 
     if video_files:
-        if st.session_state.current_video not in video_files:
+        if st.session_state.folder_loaded != folder_path:
+            st.session_state.folder_loaded = folder_path
             switch_to_video(video_files[0])
+            
+        hierarchy = {}
+        for v in video_files:
+            parts = v.split('_')
+            date_folder = parts[1] if len(parts) >= 3 else "unknown_date"
+            sess = parts[2] if len(parts) >= 3 else "unknown_session"
+            
+            if date_folder not in hierarchy:
+                hierarchy[date_folder] = {}
+            if sess not in hierarchy[date_folder]:
+                hierarchy[date_folder][sess] = []
+            hierarchy[date_folder][sess].append(v)
 
         col_video, col_data, col_playlist = st.columns([4, 2.5, 2])
         
+        # ==========================================
+        # PLAYLIST COLUMN (RIGHT)
+        # ==========================================
         with col_playlist:
             st.subheader("📋 Playlist")
-            st.radio("Select a video", video_files, key="video_selector", on_change=handle_radio_change, label_visibility="collapsed")
+            
+            # --- UPDATED: Nested Expanders for Dates & Sessions ---
+            for date_str, sessions in sorted(hierarchy.items()):
+                # Keeps the calendar date folder open ONLY if we are actively working on a video inside it
+                is_active_date = (date_str == st.session_state.last_vid_date)
+                
+                with st.expander(f"📅 **{date_str}**", expanded=is_active_date):
+                    for sess, vids in sorted(sessions.items()):
+                        # Keeps the specific session folder open if it's the active one
+                        is_current_session = (sess == st.session_state.current_session)
+                        
+                        with st.expander(f"📁 {sess} ({len(vids)} files)", expanded=is_current_session):
+                            for vid in vids:
+                                if vid == st.session_state.current_video:
+                                    st.markdown(f"<div class='active-vid'>▶️ <b>{vid}</b></div>", unsafe_allow_html=True)
+                                else:
+                                    st.button(f"📄 {vid}", key=f"btn_{vid}", use_container_width=True, on_click=handle_video_click, args=(vid,))
         
         # ==========================================
         # DATA ENTRY COLUMN (MIDDLE)
@@ -233,87 +295,121 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
             if uploaded_file is not None:
                 st.button("🔄 Load Uploaded Data", use_container_width=True, on_click=process_uploaded_file, args=(uploaded_file, video_files))
             
-            st.session_state.animal_id = st.text_input("Animal ID:", value=st.session_state.animal_id, placeholder="e.g. Mouse_12")
-            st.markdown(f"**Current Session:** `{st.session_state.current_session}`")
             st.markdown("---")
             
-            current_status = st.session_state.video_outcomes.get(st.session_state.current_video, "Unclassified")
-            status_colors = {
-                "Success": "🟢 **Success**",
-                "Fail": "🔴 **Fail**",
-                "Ignore": "⚪ **Ignored**",
-                "Unclassified": "🟡 **Unclassified**"
-            }
-            st.markdown(f"Current Video Status: {status_colors.get(current_status)}")
+            if not st.session_state.current_session:
+                st.info("👈 Select a video from the playlist to start a new session.")
             
-            btn_col1, btn_col2, btn_col3 = st.columns(3)
-            btn_col1.button("✅ Success", use_container_width=True, on_click=classify_and_advance, args=('Success', video_files))
-            btn_col2.button("❌ Fail", use_container_width=True, on_click=classify_and_advance, args=('Fail', video_files))
-            btn_col3.button("🚫 Ignore", use_container_width=True, on_click=classify_and_advance, args=('Ignore', video_files))
-            
-            succ = sum(1 for v in st.session_state.video_outcomes.values() if v == 'Success')
-            fail = sum(1 for v in st.session_state.video_outcomes.values() if v == 'Fail')
-            att = succ + fail 
-            rate = (succ / att * 100) if att > 0 else 0.0
-            
-            df_summary = pd.DataFrame([{"Attempt": att, "Success": succ, "Fail": fail, "Success Rate": f"{rate:.1f}%"}])
-            st.markdown("<br>**Session Summary:**", unsafe_allow_html=True)
-            st.dataframe(df_summary, hide_index=True, use_container_width=True)
-
-            st.markdown("**Editable Raw Data:**", help="Double-click any cell in the Outcome column to manually fix errors.")
-            if st.session_state.video_outcomes:
-                data_list = [{"Video": v, "Outcome": o, "Conflict": get_conflict_status(v, o)} for v, o in st.session_state.video_outcomes.items()]
-                df_raw = pd.DataFrame(data_list)
-                
-                edited_df = st.data_editor(
-                    df_raw, 
-                    use_container_width=True, 
-                    hide_index=True,
-                    disabled=["Video", "Conflict"] 
-                )
-                
-                new_outcomes = dict(zip(edited_df["Video"], edited_df["Outcome"]))
-                if new_outcomes != st.session_state.video_outcomes:
-                    st.session_state.video_outcomes = new_outcomes
-                    st.session_state.data_is_saved = False # --- UPDATED: Flag data as modified from manual edit ---
-                    st.rerun()
-
-            st.markdown("---")
-            st.markdown("**Manual Export:**")
-            
-            date_str = st.session_state.last_vid_date if st.session_state.last_vid_date else "000000"
-            yymmdd = date_str[2:] if len(date_str) == 8 else date_str 
-            anim_id = st.session_state.animal_id.strip() if st.session_state.animal_id.strip() else "UnknownID"
-            manual_filename = f"{yymmdd}_{anim_id}_behaviorCounts.csv"
-            
-            if st.session_state.video_outcomes:
-                df_manual_save = pd.DataFrame(data_list) 
             else:
-                df_manual_save = pd.DataFrame(columns=["Video", "Outcome", "Conflict"])
+                has_data_logged = len(st.session_state.video_outcomes) > 0
                 
-            df_manual_save["Total_Attempts"] = att
-            df_manual_save["Total_Success"] = succ
-            df_manual_save["Total_Fail"] = fail
-            df_manual_save["Success_Rate_%"] = round(rate, 1)
-            manual_csv_data = df_manual_save.to_csv(index=False)
-            
-            st.download_button(
-                label="💾 Download Current Session to Save",
-                data=manual_csv_data,
-                file_name=manual_filename,
-                mime="text/csv",
-                use_container_width=True,
-                on_click=mark_as_saved # --- UPDATED: Tells the app the data is safely exported ---
-            )
+                col_id, col_close = st.columns([3, 1])
+                with col_id:
+                    st.session_state.animal_id = st.text_input(
+                        "Animal ID:", 
+                        value=st.session_state.animal_id, 
+                        placeholder="e.g. Mouse_12",
+                        disabled=has_data_logged,
+                        label_visibility="collapsed"
+                    )
+                with col_close:
+                    if st.button("❌ Close", use_container_width=True, help="Close this session to start fresh."):
+                        if not st.session_state.data_is_saved and has_data_logged:
+                            save_session_dialog(action="close")
+                        else:
+                            close_session()
+                            st.rerun()
+
+                st.markdown(f"**Current Session:** `{st.session_state.current_session}`")
+                
+                current_session_vids = hierarchy.get(st.session_state.last_vid_date, {}).get(st.session_state.current_session, [])
+                total_session_vids = len(current_session_vids)
+                categorized_count = len(st.session_state.video_outcomes)
+                
+                st.markdown(f"**Progress:** {categorized_count} / {total_session_vids} categorized")
+                st.progress(categorized_count / total_session_vids if total_session_vids > 0 else 0)
+                
+                st.markdown("---")
+                
+                current_status = st.session_state.video_outcomes.get(st.session_state.current_video, "Unclassified")
+                status_colors = {
+                    "Success": "🟢 **Success**",
+                    "Fail": "🔴 **Fail**",
+                    "Ignore": "⚪ **Ignored**",
+                    "Unclassified": "🟡 **Unclassified**"
+                }
+                st.markdown(f"Current Video Status: {status_colors.get(current_status)}")
+                
+                btn_col1, btn_col2, btn_col3 = st.columns(3)
+                btn_col1.button("✅ Success", use_container_width=True, on_click=classify_and_advance, args=('Success', video_files))
+                btn_col2.button("❌ Fail", use_container_width=True, on_click=classify_and_advance, args=('Fail', video_files))
+                btn_col3.button("🚫 Ignore", use_container_width=True, on_click=classify_and_advance, args=('Ignore', video_files))
+                
+                succ = sum(1 for v in st.session_state.video_outcomes.values() if v == 'Success')
+                fail = sum(1 for v in st.session_state.video_outcomes.values() if v == 'Fail')
+                att = succ + fail 
+                rate = (succ / att * 100) if att > 0 else 0.0
+                
+                df_summary = pd.DataFrame([{"Attempt": att, "Success": succ, "Fail": fail, "Success Rate": f"{rate:.1f}%"}])
+                st.markdown("<br>**Session Summary:**", unsafe_allow_html=True)
+                st.dataframe(df_summary, hide_index=True, use_container_width=True)
+
+                st.markdown("**Editable Raw Data:**", help="Double-click any cell in the Outcome column to manually fix errors.")
+                if st.session_state.video_outcomes:
+                    data_list = [{"Video": v, "Outcome": o, "Conflict": get_conflict_status(v, o)} for v, o in st.session_state.video_outcomes.items()]
+                    df_raw = pd.DataFrame(data_list)
+                    
+                    edited_df = st.data_editor(
+                        df_raw, 
+                        use_container_width=True, 
+                        hide_index=True,
+                        disabled=["Video", "Conflict"] 
+                    )
+                    
+                    new_outcomes = dict(zip(edited_df["Video"], edited_df["Outcome"]))
+                    if new_outcomes != st.session_state.video_outcomes:
+                        st.session_state.video_outcomes = new_outcomes
+                        st.session_state.data_is_saved = False
+                        st.rerun()
+
+                st.markdown("---")
+                st.markdown("**Manual Export:**")
+                
+                date_str = st.session_state.last_vid_date if st.session_state.last_vid_date else "000000"
+                yymmdd = date_str[2:] if len(date_str) == 8 else date_str 
+                anim_id = st.session_state.animal_id.strip() if st.session_state.animal_id.strip() else "UnknownID"
+                manual_filename = f"{yymmdd}_{anim_id}_behaviorCounts.csv"
+                
+                if st.session_state.video_outcomes:
+                    df_manual_save = pd.DataFrame(data_list) 
+                else:
+                    df_manual_save = pd.DataFrame(columns=["Video", "Outcome", "Conflict"])
+                    
+                df_manual_save["Total_Attempts"] = att
+                df_manual_save["Total_Success"] = succ
+                df_manual_save["Total_Fail"] = fail
+                df_manual_save["Success_Rate_%"] = round(rate, 1)
+                manual_csv_data = df_manual_save.to_csv(index=False)
+                
+                st.download_button(
+                    label="💾 Download Current Session to Save",
+                    data=manual_csv_data,
+                    file_name=manual_filename,
+                    mime="text/csv",
+                    use_container_width=True,
+                    on_click=mark_as_saved 
+                )
 
         # ==========================================
         # VIDEO PLAYER COLUMN (LEFT)
         # ==========================================
         with col_video:
-            active_vid = st.session_state.current_video
-            if active_vid:
-                st.subheader(f"📺 {active_vid}")
-                video_path = os.path.join(folder_path, active_vid)
+            if not st.session_state.current_video:
+                st.info("No video selected. Please select a video from the playlist to begin analysis.")
+            else:
+                st.subheader(f"📺 {st.session_state.current_video}")
+                
+                video_path = st.session_state.video_paths_map[st.session_state.current_video]
                 
                 cap = cv2.VideoCapture(video_path)
                 if cap.isOpened():
@@ -373,6 +469,6 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
                 else:
                     st.error("Failed to open video with OpenCV.")
     else:
-        st.warning("No supported video files found.")
+        st.warning("No supported video files found in this directory or subdirectories.")
 else:
     st.error("Please enter a valid folder path.")

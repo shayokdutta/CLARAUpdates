@@ -4,16 +4,16 @@
 
 A sleek, browser-based frame-by-frame video analyzer and behavioral logging tool built with Python and Streamlit. 
 
-This tool is designed to streamline the manual classification of animal behavioral tasks. It combines a robust video player with an integrated data-entry system, automatically groups videos by session, audits manual curation against automated neural network labels, and provides bulletproof data-saving features to prevent accidental data loss in the lab.
+This tool is designed to streamline the manual classification of animal reaching tasks. It combines a robust video player with an integrated data-entry system, automatically scans your directories to group videos by date and session, audits manual curation against automated neural network labels, and provides bulletproof data-saving features to prevent accidental data loss in the lab.
 
 ## ✨ Key Features
 * **Modern Web Interface:** Replaces clunky desktop GUI frameworks with a responsive web app.
-* **Frame-by-Frame Control:** Scrub through videos with absolute precision or play them at a controlled 10 FPS.
-* **Smart Session Tracking:** Automatically detects when you switch to a new animal/session. If you have unsaved changes, it prevents data loss by halting the app and prompting you to save.
+* **Smart Directory Scanning:** Point the app to a root folder (e.g., `learning/`) and it will automatically map out all subfolders, building a clean, collapsible hierarchy of Dates ➡️ Sessions ➡️ Videos.
+* **Workspace Management:** Live progress tracking (e.g., `4/15 categorized`) and session-locking. Your Animal ID locks once you start curating to prevent typos, and you can cleanly "Close" a session when finished to clear your workspace.
 * **Automated Curation Auditing (Conflict Detection):** Automatically compares your manual label against the automated neural network label in the video's filename, flagging mismatches for easy auditing.
 * **Live Editable Dataframes:** Fix classification mistakes on the fly by double-clicking directly inside the app's raw data table.
-* **Seamless Session Resuming:** Upload a previously saved CSV to instantly restore your session's exact state and jump back to the first video.
-* **Overwrite Protection:** Built-in safeguards prevent you from accidentally overwriting an existing animal's data file without explicit confirmation.
+* **Seamless Session Resuming:** Upload a previously saved CSV to instantly restore your session's exact state, including all previous classifications and the Animal ID.
+* **Overwrite & Data Loss Protection:** Built-in safeguards prevent you from closing an unsaved session, switching videos without saving, or accidentally overwriting an existing animal's data file without explicit confirmation.
 
 ---
 
@@ -33,9 +33,11 @@ A new tab will automatically open in your default web browser displaying the app
 
 ---
 
-## 📂 Required File Naming Convention
+## 📂 Required File & Folder Naming Convention
 
-For the automatic session-tracking and conflict-detection to work, your video files **must** follow this naming convention:
+**Folder Structure:** The app supports nested directories. It is recommended to have a root folder (e.g., `learning/`) containing subfolders for each date (e.g., `20251125/`).
+
+**Video Files:** For the automatic session-tracking and conflict-detection to work, your video files **must** follow this naming convention:
 `v_YYYYMMDD_sessionXXX_anything_else_automatedLabel.mp4`
 
 **Examples:**
@@ -51,30 +53,29 @@ The app splits the filename by underscores (`_`). It expects:
 
 ## 🚀 How to Use the Analyzer
 
-### 1. Load Your Folder
-At the top of the app, paste the absolute path to the directory containing your video files and press `Enter`. The playlist on the right will automatically populate.
+### 1. Load Your Directory
+At the top of the app, paste the absolute path to your root directory (e.g., `.../learning/`) and press `Enter`. The playlist on the right will automatically build a collapsible tree of all dates and sessions found inside.
 
 ### 2. Start or Resume a Session
-* **New Session:** Click the first video in the playlist for your target session. In the middle **Session Data** column, type in the **Animal ID** (e.g., `Mouse_12`).
-* **Resume Session:** Drag and drop a previously saved `.csv` file into the "Upload CSV to Resume Data" box. The app will automatically fill in the Animal ID, load your previous classifications, and jump to the first video.
+* **New Session:** Expand a session folder in the playlist and click the first video. In the middle **Session Data** column, type in the **Animal ID** (e.g., `Mouse_12`).
+* **Resume Session:** Use the "Upload CSV to Resume Data" box at the top of the middle column. The app will automatically fill in the Animal ID, load your previous classifications, and jump to the correct video.
 
 ### 3. Analyze and Classify
-Use the video controls to analyze the behavior, then click one of the classification buttons:
-* **✅ Success:** Logs a success and auto-advances to the next video.
-* **❌ Fail:** Logs a failure and auto-advances.
-* **🚫 Ignore:** Marks the video as a non-attempt and flags it as a conflict (does not add to the attempt total).
-
-*Note: If you make a mistake, you can simply scroll down to the "Editable Raw Data" table and double-click the outcome cell to change it. The summary statistics and conflict flags will recalculate instantly.*
+* Use the video controls to analyze the behavior frame-by-frame. 
+* Click one of the classification buttons: **✅ Success**, **❌ Fail**, or **🚫 Ignore**. 
+* The video will automatically advance, your progress bar will update, and the **Animal ID will lock** to prevent accidental changes.
+* *Note: To fix a mistake, scroll down to the "Editable Raw Data" table and double-click the outcome cell to change it. The summary stats will instantly recalculate.*
 
 ### 4. The "Conflict" Column (Data Auditing)
-The software automatically audits your manual label against the filename's automated label:
+The software automatically audits your manual label against the filename's automated neural network label:
 * **`0` (Match):** Your manual label matches the neural network's label.
 * **`1` (Conflict):** Your manual label disagrees with the neural network, or you marked the video as `Ignore`.
 
-### 5. Saving Your Data
-The app tracks whether you have unsaved modifications. 
-* **Manual Export:** Click "Download Current Session to Save" at any time to download the CSV directly to your default downloads folder.
-* **Smart Auto-Prompt:** When you finish a session and click a video belonging to a *new* session in the playlist, the app will freeze and prompt you to save the completed session directly to your video folder. If no changes were made since your last save, it will silently transition to the new session without interrupting your workflow.
+### 5. Saving & Closing Your Workspace
+The app tracks unsaved modifications for you.
+* **Save & Close:** When you finish an animal, click the **❌ Close** button next to the Animal ID. If you haven't saved, a popup will force you to save the `.csv` file directly into the video's original subfolder before clearing the screen.
+* **Auto-Prompt:** If you try to jump to a different session in the playlist without saving your current one, the app will freeze and prompt you to save first.
+* **Manual Export:** You can click "Download Current Session to Save" at any time to download a backup CSV directly to your browser's default downloads folder.
 
 ---
 
