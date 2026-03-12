@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import cv2
 import os
@@ -14,21 +15,18 @@ st.markdown("""
             padding-bottom: 1rem;
         }
         
-        /* Make the default (secondary) button Green inside the dialog */
         div[data-testid="stDialog"] button[kind="secondary"] {
             background-color: #2e7d32 !important;
             color: white !important;
             border-color: #2e7d32 !important;
         }
         
-        /* Make the primary button Red inside the dialog */
         div[data-testid="stDialog"] button[kind="primary"] {
             background-color: #d32f2f !important;
             color: white !important;
             border-color: #d32f2f !important;
         }
         
-        /* Style for the active video in the playlist */
         .active-vid {
             background-color: rgba(46, 125, 50, 0.2);
             padding: 8px;
@@ -36,8 +34,78 @@ st.markdown("""
             border-left: 4px solid #2e7d32;
             margin-bottom: 5px;
         }
+        
+        .date-header {
+            margin-top: 15px;
+            margin-bottom: 5px;
+            font-size: 1.1em;
+            color: #444;
+        }
+        
+        /* Force Streamlit to stop greying out images during playback */
+        .stElementContainer, 
+        div[data-testid="stImage"], 
+        img {
+            opacity: 1 !important;
+            transition: none !important;
+            filter: none !important;
+        }
     </style>
 """, unsafe_allow_html=True)
+
+# --- UPDATED: Ruthless JavaScript Keyboard Listener ---
+components.html(
+    """
+    <script>
+    function handleKeydown(e) {
+        const doc = window.parent.document;
+        const activeTag = document.activeElement ? document.activeElement.tagName : "";
+        const parentActiveTag = doc.activeElement ? doc.activeElement.tagName : "";
+        
+        // Do not intercept if the user is typing in a text box
+        if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || 
+            parentActiveTag === 'INPUT' || parentActiveTag === 'TEXTAREA') {
+            return;
+        }
+        
+        // --- FIX: IMMEDIATELY halt default browser actions for Space and Arrows ---
+        if (e.code === 'Space' || e.key === ' ' || e.key.includes('Arrow')) {
+            e.preventDefault();
+            e.stopPropagation(); // Kills the event before the browser can scroll
+        }
+        
+        let xpath = "";
+        if (e.key === 'ArrowRight') xpath = "//button[contains(., 'Next ➡️')]";
+        else if (e.key === 'ArrowLeft') xpath = "//button[contains(., '⬅️ Prev')]";
+        else if (e.key === 'ArrowDown') xpath = "//button[contains(., '⬇️ Next Vid')]";
+        else if (e.key === 'ArrowUp') xpath = "//button[contains(., '⬆️ Prev Vid')]";
+        else if (e.key.toLowerCase() === 's') xpath = "//button[contains(., '✅ Success')]";
+        else if (e.key.toLowerCase() === 'f') xpath = "//button[contains(., '❌ Fail')]";
+        else if (e.key.toLowerCase() === 'i') xpath = "//button[contains(., '🚫 Ignore')]";
+
+        if (xpath) {
+            let btn = doc.evaluate(xpath, doc, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+            if (btn) btn.click();
+        } else if (e.code === 'Space' || e.key === ' ') {
+            let playBtn = doc.evaluate("//button[contains(., '▶️ Play')]", doc, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+            let pauseBtn = doc.evaluate("//button[contains(., '⏸️ Pause')]", doc, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+            let btn = playBtn || pauseBtn;
+            if (btn) btn.click();
+        }
+    }
+
+    // Attach to BOTH the iframe and the parent window to guarantee we catch it regardless of focus.
+    // 'capture: true' intercepts the event on the way DOWN the DOM, beating the browser scroll.
+    if (!window.parent.customListenerAdded) {
+        window.parent.addEventListener('keydown', handleKeydown, { passive: false, capture: true });
+        window.parent.customListenerAdded = true;
+    }
+    window.addEventListener('keydown', handleKeydown, { passive: false, capture: true });
+    </script>
+    """,
+    height=0,
+    width=0,
+)
 
 st.title("🐁 Reach Behavioral Analyzer")
 
@@ -45,8 +113,8 @@ st.title("🐁 Reach Behavioral Analyzer")
 # 2. State Management Initialization
 # ==========================================
 if 'frame_number' not in st.session_state: st.session_state.frame_number = 0
-if 'display_height' not in st.session_state: st.session_state.display_height = 300
 if 'is_playing' not in st.session_state: st.session_state.is_playing = False
+if 'display_height' not in st.session_state: st.session_state.display_height = 400
 
 if 'current_video' not in st.session_state: st.session_state.current_video = None
 if 'current_session' not in st.session_state: st.session_state.current_session = None
@@ -56,9 +124,14 @@ if 'animal_id' not in st.session_state: st.session_state.animal_id = ""
 if 'current_folder' not in st.session_state: st.session_state.current_folder = "."
 if 'data_is_saved' not in st.session_state: st.session_state.data_is_saved = True
 
-# Tracks if the folder was just loaded so we don't auto-force a video to open after closing
 if 'video_paths_map' not in st.session_state: st.session_state.video_paths_map = {}
 if 'folder_loaded' not in st.session_state: st.session_state.folder_loaded = ""
+if 'video_files_list' not in st.session_state: st.session_state.video_files_list = []
+
+if 'video_frames' not in st.session_state: st.session_state.video_frames = []
+if 'loaded_video_name' not in st.session_state: st.session_state.loaded_video_name = None
+if 'video_aspect_ratio' not in st.session_state: st.session_state.video_aspect_ratio = 1.0
+if 'video_fps' not in st.session_state: st.session_state.video_fps = 150.0
 
 # ==========================================
 # 3. Core Functions & Callbacks
@@ -83,6 +156,8 @@ def close_session():
     st.session_state.last_vid_date = None
     st.session_state.frame_number = 0
     st.session_state.is_playing = False
+    st.session_state.video_frames = []
+    st.session_state.loaded_video_name = None
 
 def switch_to_video(new_vid):
     parts = new_vid.split('_')
@@ -99,6 +174,30 @@ def switch_to_video(new_vid):
     st.session_state.last_vid_date = vid_date
     st.session_state.frame_number = 0
     st.session_state.is_playing = False
+
+def prev_video_in_session():
+    vids = st.session_state.video_files_list
+    if not st.session_state.current_video or not vids: return
+    try:
+        curr_idx = vids.index(st.session_state.current_video)
+        if curr_idx > 0:
+            prev_vid = vids[curr_idx - 1]
+            if prev_vid.split('_')[2] == st.session_state.current_session:
+                switch_to_video(prev_vid)
+    except ValueError:
+        pass
+
+def next_video_in_session():
+    vids = st.session_state.video_files_list
+    if not st.session_state.current_video or not vids: return
+    try:
+        curr_idx = vids.index(st.session_state.current_video)
+        if curr_idx < len(vids) - 1:
+            next_vid = vids[curr_idx + 1]
+            if next_vid.split('_')[2] == st.session_state.current_session:
+                switch_to_video(next_vid)
+    except ValueError:
+        pass
 
 def process_uploaded_file(uploaded_file, vid_files):
     try:
@@ -164,7 +263,7 @@ def save_session_dialog(intended_vid=None, action="switch"):
         disable_save = False
         btn_label = f"💾 Save '{filename}' to Folder & " + ("Close" if action == "close" else "Switch")
 
-    if st.button(btn_label, use_container_width=True, disabled=disable_save):
+    if st.button(btn_label, width="stretch", disabled=disable_save):
         try:
             with open(save_path, "w") as f:
                 f.write(csv_data)
@@ -179,7 +278,7 @@ def save_session_dialog(intended_vid=None, action="switch"):
     
     st.markdown("---")
     discard_label = "🗑️ Discard Data & Close" if action == "close" else "🗑️ Discard Data & Switch Anyway"
-    if st.button(discard_label, type="primary", use_container_width=True):
+    if st.button(discard_label, type="primary", width="stretch", on_click=switch_to_video, args=(intended_vid,)):
         if action == "close":
             close_session()
         else:
@@ -215,6 +314,7 @@ def classify_and_advance(outcome, video_files):
     except ValueError:
         pass 
 
+# Scrubbing Callbacks
 def next_frame(total_frames):
     if st.session_state.frame_number < total_frames - 1: st.session_state.frame_number += 1
 def prev_frame():
@@ -222,6 +322,106 @@ def prev_frame():
 def sync_jump(): st.session_state.frame_number = st.session_state.jump_input
 def sync_slider(): st.session_state.frame_number = st.session_state.slider_frame
 def toggle_play(): st.session_state.is_playing = not st.session_state.is_playing
+
+
+# ==========================================
+# VIDEO PLAYER FRAGMENT (PURE OPENCV)
+# ==========================================
+@st.fragment
+def video_player_fragment():
+    active_vid = st.session_state.current_video
+    if not active_vid:
+        return
+
+    video_path = st.session_state.video_paths_map[active_vid]
+
+    # Pre-load entire video into RAM with aggressive compression
+    if active_vid != st.session_state.loaded_video_name:
+        with st.spinner("Loading video into memory for fast playback..."):
+            cap = cv2.VideoCapture(video_path)
+            frames = []
+            if cap.isOpened():
+                st.session_state.video_fps = 150.0 
+                
+                while True:
+                    ret, frame = cap.read()
+                    if not ret: break
+                    
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    h, w, _ = frame_rgb.shape
+                    
+                    target_width = 700 
+                    scale = target_width / float(w)
+                    target_height = int(h * scale)
+                    
+                    resized_frame = cv2.resize(frame_rgb, (target_width, target_height))
+                    
+                    if len(frames) == 0:
+                        st.session_state.video_aspect_ratio = float(w) / float(h)
+                    
+                    success, buffer = cv2.imencode('.jpg', resized_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+                    if success:
+                        frames.append(buffer.tobytes())
+                        
+                cap.release()
+                st.session_state.video_frames = frames
+                st.session_state.loaded_video_name = active_vid
+                st.session_state.frame_number = 0
+            else:
+                st.error("Failed to open video file.")
+                return
+
+    frames = st.session_state.video_frames
+    total_frames = len(frames)
+
+    if total_frames > 0:
+        st.write(f"**Frames:** {total_frames} | **Camera FPS:** {st.session_state.video_fps:.0f} | **RAM Cache:** Active")
+
+        col_height, col_speed = st.columns(2)
+        with col_height:
+            st.slider("📏 Display Height", min_value=100, max_value=1080, step=50, key="display_height")
+        with col_speed:
+            target_playback_fps = st.slider("⏱️ Playback Speed (App FPS)", min_value=10, max_value=60, value=25, step=5, 
+                                            help="Your camera is 150 FPS. Playing at 25 FPS = 6x slow motion.")
+        
+        if st.session_state.frame_number >= total_frames:
+            st.session_state.frame_number = total_frames - 1
+
+        calc_width = int(st.session_state.display_height * st.session_state.video_aspect_ratio)
+        st.image(frames[st.session_state.frame_number], width=calc_width)
+        st.markdown("---")
+
+        st.session_state.slider_frame = st.session_state.frame_number
+        st.session_state.jump_input = st.session_state.frame_number
+
+        col_play, col_prev, col_input, col_next = st.columns([1, 1, 3, 1])
+
+        with col_play:
+            play_label = "⏸️ Pause" if st.session_state.is_playing else "▶️ Play"
+            st.button(play_label, width="stretch", on_click=toggle_play, help="Hotkey: Spacebar")
+
+        with col_prev:
+            st.button("⬅️ Prev", width="stretch", on_click=prev_frame, help="Hotkey: Left Arrow")
+                
+        with col_input:
+            st.slider("Scrub Frames", min_value=0, max_value=max(0, total_frames - 1), key="slider_frame", on_change=sync_slider, label_visibility="collapsed")
+                
+        with col_next:
+            st.button("Next ➡️", width="stretch", on_click=next_frame, args=(total_frames,), help="Hotkey: Right Arrow")
+
+        st.number_input("Jump to exact frame:", min_value=0, max_value=max(0, total_frames - 1), step=1, key="jump_input", on_change=sync_jump)
+
+        if st.session_state.is_playing:
+            if st.session_state.frame_number < total_frames - 1:
+                sleep_delay = 1.0 / target_playback_fps
+                time.sleep(sleep_delay) 
+                st.session_state.frame_number += 1
+                st.rerun()       
+            else:
+                st.session_state.is_playing = False 
+                st.rerun()
+    else:
+        st.error("Could not load frames into memory.")
 
 # ==========================================
 # 4. Main App Layout
@@ -242,6 +442,7 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
                 st.session_state.video_paths_map[f] = os.path.join(root, f)
 
     video_files = sorted(video_files)
+    st.session_state.video_files_list = video_files 
 
     if video_files:
         if st.session_state.folder_loaded != folder_path:
@@ -268,14 +469,11 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
         with col_playlist:
             st.subheader("📋 Playlist")
             
-            # --- UPDATED: Nested Expanders for Dates & Sessions ---
             for date_str, sessions in sorted(hierarchy.items()):
-                # Keeps the calendar date folder open ONLY if we are actively working on a video inside it
                 is_active_date = (date_str == st.session_state.last_vid_date)
                 
                 with st.expander(f"📅 **{date_str}**", expanded=is_active_date):
                     for sess, vids in sorted(sessions.items()):
-                        # Keeps the specific session folder open if it's the active one
                         is_current_session = (sess == st.session_state.current_session)
                         
                         with st.expander(f"📁 {sess} ({len(vids)} files)", expanded=is_current_session):
@@ -283,7 +481,7 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
                                 if vid == st.session_state.current_video:
                                     st.markdown(f"<div class='active-vid'>▶️ <b>{vid}</b></div>", unsafe_allow_html=True)
                                 else:
-                                    st.button(f"📄 {vid}", key=f"btn_{vid}", use_container_width=True, on_click=handle_video_click, args=(vid,))
+                                    st.button(f"📄 {vid}", key=f"btn_{vid}", width="stretch", on_click=handle_video_click, args=(vid,))
         
         # ==========================================
         # DATA ENTRY COLUMN (MIDDLE)
@@ -293,7 +491,7 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
             
             uploaded_file = st.file_uploader("📥 Upload CSV to Resume Data", type=['csv'])
             if uploaded_file is not None:
-                st.button("🔄 Load Uploaded Data", use_container_width=True, on_click=process_uploaded_file, args=(uploaded_file, video_files))
+                st.button("🔄 Load Uploaded Data", width="stretch", on_click=process_uploaded_file, args=(uploaded_file, video_files))
             
             st.markdown("---")
             
@@ -313,7 +511,7 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
                         label_visibility="collapsed"
                     )
                 with col_close:
-                    if st.button("❌ Close", use_container_width=True, help="Close this session to start fresh."):
+                    if st.button("❌ Close", width="stretch", help="Close this session to start fresh."):
                         if not st.session_state.data_is_saved and has_data_logged:
                             save_session_dialog(action="close")
                         else:
@@ -341,9 +539,9 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
                 st.markdown(f"Current Video Status: {status_colors.get(current_status)}")
                 
                 btn_col1, btn_col2, btn_col3 = st.columns(3)
-                btn_col1.button("✅ Success", use_container_width=True, on_click=classify_and_advance, args=('Success', video_files))
-                btn_col2.button("❌ Fail", use_container_width=True, on_click=classify_and_advance, args=('Fail', video_files))
-                btn_col3.button("🚫 Ignore", use_container_width=True, on_click=classify_and_advance, args=('Ignore', video_files))
+                btn_col1.button("✅ Success", width="stretch", on_click=classify_and_advance, args=('Success', video_files), help="Hotkey: 'S'")
+                btn_col2.button("❌ Fail", width="stretch", on_click=classify_and_advance, args=('Fail', video_files), help="Hotkey: 'F'")
+                btn_col3.button("🚫 Ignore", width="stretch", on_click=classify_and_advance, args=('Ignore', video_files), help="Hotkey: 'I'")
                 
                 succ = sum(1 for v in st.session_state.video_outcomes.values() if v == 'Success')
                 fail = sum(1 for v in st.session_state.video_outcomes.values() if v == 'Fail')
@@ -352,7 +550,7 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
                 
                 df_summary = pd.DataFrame([{"Attempt": att, "Success": succ, "Fail": fail, "Success Rate": f"{rate:.1f}%"}])
                 st.markdown("<br>**Session Summary:**", unsafe_allow_html=True)
-                st.dataframe(df_summary, hide_index=True, use_container_width=True)
+                st.dataframe(df_summary, hide_index=True, width="stretch")
 
                 st.markdown("**Editable Raw Data:**", help="Double-click any cell in the Outcome column to manually fix errors.")
                 if st.session_state.video_outcomes:
@@ -361,7 +559,7 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
                     
                     edited_df = st.data_editor(
                         df_raw, 
-                        use_container_width=True, 
+                        width="stretch", 
                         hide_index=True,
                         disabled=["Video", "Conflict"] 
                     )
@@ -396,7 +594,7 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
                     data=manual_csv_data,
                     file_name=manual_filename,
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                     on_click=mark_as_saved 
                 )
 
@@ -407,67 +605,18 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
             if not st.session_state.current_video:
                 st.info("No video selected. Please select a video from the playlist to begin analysis.")
             else:
-                st.subheader(f"📺 {st.session_state.current_video}")
+                active_vid = st.session_state.current_video
                 
-                video_path = st.session_state.video_paths_map[st.session_state.current_video]
-                
-                cap = cv2.VideoCapture(video_path)
-                if cap.isOpened():
-                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                    fps = cap.get(cv2.CAP_PROP_FPS)
+                col_title, col_up, col_down = st.columns([6, 1.5, 1.5])
+                with col_title:
+                    st.subheader(f"📺 {active_vid}")
+                with col_up:
+                    st.button("⬆️ Prev Vid", width="stretch", on_click=prev_video_in_session, help="Hotkey: Up Arrow")
+                with col_down:
+                    st.button("⬇️ Next Vid", width="stretch", on_click=next_video_in_session, help="Hotkey: Down Arrow")
                     
-                    st.write(f"**Total Frames:** {total_frames} | **Playback:** 10 FPS")
+                video_player_fragment()
 
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, st.session_state.frame_number)
-                    ret, frame = cap.read()
-                    
-                    if ret:
-                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        
-                        st.slider("🔍 Adjust Video Display Height", min_value=100, max_value=1080, step=50, key="display_height")
-                        
-                        h, w, _ = frame_rgb.shape
-                        aspect_ratio = w / h
-                        calc_width = int(st.session_state.display_height * aspect_ratio)
-                        
-                        st.image(frame_rgb, width=calc_width)
-                    else:
-                        st.error("Could not read frame.")
-                        
-                    cap.release()
-
-                    st.markdown("---")
-
-                    st.session_state.slider_frame = st.session_state.frame_number
-                    st.session_state.jump_input = st.session_state.frame_number
-
-                    col_play, col_prev, col_input, col_next = st.columns([1, 1, 3, 1])
-                    
-                    with col_play:
-                        play_label = "⏸️ Pause" if st.session_state.is_playing else "▶️ Play"
-                        st.button(play_label, on_click=toggle_play, use_container_width=True)
-
-                    with col_prev:
-                        st.button("⬅️ Prev", on_click=prev_frame, use_container_width=True)
-                            
-                    with col_input:
-                        st.slider("Scrub Frames", min_value=0, max_value=max(0, total_frames - 1), key="slider_frame", on_change=sync_slider, label_visibility="collapsed")
-                            
-                    with col_next:
-                        st.button("Next ➡️", on_click=next_frame, args=(total_frames,), use_container_width=True)
-
-                    st.number_input("Jump to exact frame:", min_value=0, max_value=max(0, total_frames - 1), step=1, key="jump_input", on_change=sync_jump)
-
-                    if st.session_state.is_playing:
-                        if st.session_state.frame_number < total_frames - 1:
-                            time.sleep(0.1) 
-                            st.session_state.frame_number += 1
-                            st.rerun()       
-                        else:
-                            st.session_state.is_playing = False 
-                            st.rerun()
-                else:
-                    st.error("Failed to open video with OpenCV.")
     else:
         st.warning("No supported video files found in this directory or subdirectories.")
 else:
