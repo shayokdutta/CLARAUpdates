@@ -53,53 +53,62 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- UPDATED: Ruthless JavaScript Keyboard Listener ---
+# --- ULTRA-ROBUST JAVASCRIPT HOTKEYS ---
 components.html(
     """
     <script>
+    const parentWindow = window.parent;
+    const parentDoc = parentWindow.document;
+
     function handleKeydown(e) {
-        const doc = window.parent.document;
         const activeTag = document.activeElement ? document.activeElement.tagName : "";
-        const parentActiveTag = doc.activeElement ? doc.activeElement.tagName : "";
+        const parentActiveTag = parentDoc.activeElement ? parentDoc.activeElement.tagName : "";
         
-        // Do not intercept if the user is typing in a text box
+        // Ignore if you are typing an Animal ID in the text box
         if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || 
             parentActiveTag === 'INPUT' || parentActiveTag === 'TEXTAREA') {
             return;
         }
-        
-        // --- FIX: IMMEDIATELY halt default browser actions for Space and Arrows ---
-        if (e.code === 'Space' || e.key === ' ' || e.key.includes('Arrow')) {
+
+        let targetText = "";
+        if (e.key === 'ArrowRight') targetText = 'Next ➡️';
+        else if (e.key === 'ArrowLeft') targetText = '⬅️ Prev';
+        else if (e.key === 'ArrowDown') targetText = '⬇️ Next Vid';
+        else if (e.key === 'ArrowUp') targetText = '⬆️ Prev Vid';
+        else if (e.key.toLowerCase() === 's') targetText = '✅ Success';
+        else if (e.key.toLowerCase() === 'f') targetText = '❌ Fail';
+        else if (e.key.toLowerCase() === 'i') targetText = '🚫 Ignore';
+        else if (e.code === 'Space' || e.key === ' ') targetText = 'PLAY_PAUSE';
+
+        if (targetText !== "") {
+            // Kill default browser scrolling immediately
             e.preventDefault();
-            e.stopPropagation(); // Kills the event before the browser can scroll
-        }
-        
-        let xpath = "";
-        if (e.key === 'ArrowRight') xpath = "//button[contains(., 'Next ➡️')]";
-        else if (e.key === 'ArrowLeft') xpath = "//button[contains(., '⬅️ Prev')]";
-        else if (e.key === 'ArrowDown') xpath = "//button[contains(., '⬇️ Next Vid')]";
-        else if (e.key === 'ArrowUp') xpath = "//button[contains(., '⬆️ Prev Vid')]";
-        else if (e.key.toLowerCase() === 's') xpath = "//button[contains(., '✅ Success')]";
-        else if (e.key.toLowerCase() === 'f') xpath = "//button[contains(., '❌ Fail')]";
-        else if (e.key.toLowerCase() === 'i') xpath = "//button[contains(., '🚫 Ignore')]";
+            e.stopPropagation();
 
-        if (xpath) {
-            let btn = doc.evaluate(xpath, doc, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-            if (btn) btn.click();
-        } else if (e.code === 'Space' || e.key === ' ') {
-            let playBtn = doc.evaluate("//button[contains(., '▶️ Play')]", doc, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-            let pauseBtn = doc.evaluate("//button[contains(., '⏸️ Pause')]", doc, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-            let btn = playBtn || pauseBtn;
-            if (btn) btn.click();
+            // Hunt down the button by its exact text
+            const buttons = Array.from(parentDoc.querySelectorAll('button'));
+            let btnToClick = null;
+
+            if (targetText === 'PLAY_PAUSE') {
+                btnToClick = buttons.find(b => b.innerText.includes('▶️ Play') || b.innerText.includes('⏸️ Pause'));
+            } else {
+                btnToClick = buttons.find(b => b.innerText.includes(targetText));
+            }
+
+            if (btnToClick) btnToClick.click();
         }
     }
 
-    // Attach to BOTH the iframe and the parent window to guarantee we catch it regardless of focus.
-    // 'capture: true' intercepts the event on the way DOWN the DOM, beating the browser scroll.
-    if (!window.parent.customListenerAdded) {
-        window.parent.addEventListener('keydown', handleKeydown, { passive: false, capture: true });
-        window.parent.customListenerAdded = true;
+    // CRITICAL FIX: Wipe out any old listeners from previous Streamlit redraws
+    if (parentWindow._custom_hotkeys) {
+        parentWindow.removeEventListener('keydown', parentWindow._custom_hotkeys, { capture: true });
     }
+    
+    // Attach the fresh listener to the absolute top level of the browser
+    parentWindow._custom_hotkeys = handleKeydown;
+    parentWindow.addEventListener('keydown', handleKeydown, { passive: false, capture: true });
+    
+    // Safety net: attach to the iframe itself just in case it steals focus
     window.addEventListener('keydown', handleKeydown, { passive: false, capture: true });
     </script>
     """,
@@ -160,6 +169,9 @@ def close_session():
     st.session_state.loaded_video_name = None
 
 def switch_to_video(new_vid):
+    if not new_vid or not isinstance(new_vid, str): 
+        return
+        
     parts = new_vid.split('_')
     new_session = parts[2] if len(parts) >= 3 else "unknown"
     vid_date = parts[1] if len(parts) >= 3 else "000000"
@@ -209,9 +221,12 @@ def process_uploaded_file(uploaded_file, vid_files):
             file_name = uploaded_file.name
             if "_behaviorCounts.csv" in file_name:
                 prefix = file_name.replace("_behaviorCounts.csv", "")
-                parts = prefix.split("_", 1) 
-                if len(parts) > 1:
-                    st.session_state.animal_id = parts[1]
+                # Splitting the prefix based on the new filename format
+                parts = prefix.split("_")
+                if len(parts) >= 3:
+                    # Depending on how the string splits, we grab the animal ID
+                    # YYMMDD_session_animalID
+                    st.session_state.animal_id = parts[2]
             
             first_video_in_session = df_loaded["Video"].iloc[0]
             if first_video_in_session in vid_files:
@@ -232,8 +247,10 @@ def save_session_dialog(intended_vid=None, action="switch"):
     date_str = st.session_state.last_vid_date
     yymmdd = date_str[2:] if len(date_str) == 8 else date_str 
     anim_id = st.session_state.animal_id.strip() if st.session_state.animal_id.strip() else "UnknownID"
+    session_id = st.session_state.current_session if st.session_state.current_session else "unknownSession"
     
-    filename = f"{yymmdd}_{anim_id}_behaviorCounts.csv"
+    # --- UPDATED: New CSV Filename Format ---
+    filename = f"{yymmdd}_{session_id}_{anim_id}_behaviorCounts.csv"
     
     current_vid_abs_path = st.session_state.video_paths_map.get(st.session_state.current_video, st.session_state.current_folder)
     save_dir = os.path.dirname(current_vid_abs_path)
@@ -278,11 +295,11 @@ def save_session_dialog(intended_vid=None, action="switch"):
     
     st.markdown("---")
     discard_label = "🗑️ Discard Data & Close" if action == "close" else "🗑️ Discard Data & Switch Anyway"
-    if st.button(discard_label, type="primary", width="stretch", on_click=switch_to_video, args=(intended_vid,)):
+    if st.button(discard_label, type="primary", width="stretch"):
         if action == "close":
             close_session()
         else:
-            switch_to_video(intended_vid)
+            if intended_vid: switch_to_video(intended_vid)
         st.rerun()
 
 def handle_video_click(new_vid):
@@ -347,14 +364,13 @@ def video_player_fragment():
                     ret, frame = cap.read()
                     if not ret: break
                     
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    h, w, _ = frame_rgb.shape
+                    h, w, _ = frame.shape
                     
                     target_width = 700 
                     scale = target_width / float(w)
                     target_height = int(h * scale)
                     
-                    resized_frame = cv2.resize(frame_rgb, (target_width, target_height))
+                    resized_frame = cv2.resize(frame, (target_width, target_height))
                     
                     if len(frames) == 0:
                         st.session_state.video_aspect_ratio = float(w) / float(h)
@@ -436,8 +452,20 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
     st.session_state.video_paths_map.clear()
     
     for root, dirs, files in os.walk(folder_path):
+        
+        # --- FIX: Dynamically ignore both subdirectories ---
+        if 'foregrounds' in dirs:
+            dirs.remove('foregrounds')
+        if 'rawfragments' in dirs:
+            dirs.remove('rawfragments')
+            
+        # Ignore stray videos sitting in the main root directory
+        if os.path.abspath(root) == os.path.abspath(folder_path):
+            continue
+            
         for f in files:
-            if f.lower().endswith(supported_exts):
+            # Added 'v_' check so we never grab background.mp4 or other files
+            if f.lower().endswith(supported_exts) and f.startswith('v_'):
                 video_files.append(f)
                 st.session_state.video_paths_map[f] = os.path.join(root, f)
 
@@ -496,7 +524,7 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
             st.markdown("---")
             
             if not st.session_state.current_session:
-                st.info("👈 Select a video from the playlist to start a new session.")
+                st.info("Select a video from the playlist to start a new session 👉.")
             
             else:
                 has_data_logged = len(st.session_state.video_outcomes) > 0
@@ -576,7 +604,10 @@ if os.path.exists(folder_path) and os.path.isdir(folder_path):
                 date_str = st.session_state.last_vid_date if st.session_state.last_vid_date else "000000"
                 yymmdd = date_str[2:] if len(date_str) == 8 else date_str 
                 anim_id = st.session_state.animal_id.strip() if st.session_state.animal_id.strip() else "UnknownID"
-                manual_filename = f"{yymmdd}_{anim_id}_behaviorCounts.csv"
+                session_id = st.session_state.current_session if st.session_state.current_session else "unknownSession"
+                
+                # --- UPDATED: New CSV Filename Format ---
+                manual_filename = f"{yymmdd}_{session_id}_{anim_id}_behaviorCounts.csv"
                 
                 if st.session_state.video_outcomes:
                     df_manual_save = pd.DataFrame(data_list) 
